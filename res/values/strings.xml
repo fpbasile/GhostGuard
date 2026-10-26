@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GhostGuard</string>
+    <string name="service_desc">Blocks ghost touches from a damaged screen. Touches in the protected zone are analyzed: real ones are replayed, fake ones are dropped.</string>
+</resources>
