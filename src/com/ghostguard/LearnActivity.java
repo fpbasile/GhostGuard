@@ -350,7 +350,10 @@ public class LearnActivity extends Activity {
         Collections.sort(gaps);
         boolean bursty = gaps.size() >= 3 && gaps.get(gaps.size() / 2) < 400;
         if (bursty) level = Math.max(level, 3);
-        if (afterShare >= 0.5f) level = Math.max(level, 4);   // your touches set them off
+        // Your touches set them off: the cascade guard handles that better than strictness.
+        int cascadeMs = prefs.getInt(Prefs.CASCADE_MS, 700);
+        if (afterShare >= 0.5f) cascadeMs = Math.max(cascadeMs, 1000);
+        else if (afterShare >= 0.2f) cascadeMs = Math.max(cascadeMs, 700);
 
         // Hotspots outside the top zone become custom zones.
         float topFrac = zoneDp * density / screenH;
@@ -385,15 +388,17 @@ public class LearnActivity extends Activity {
         LinearLayout sug = ui.card("Suggested settings");
         sug.addView(fact(ui, "Top zone height", zoneDp + " dp"));
         sug.addView(fact(ui, "Strictness", level + " / 5"));
+        sug.addView(fact(ui, "Cascade guard", cascadeMs == 0 ? "Off" : cascadeMs + " ms"));
         sug.addView(fact(ui, "New custom zones", String.valueOf(hot.size())));
         root.addView(sug);
 
-        final int fZone = zoneDp, fLevel = level;
+        final int fZone = zoneDp, fLevel = level, fCascade = cascadeMs;
         root.addView(ui.button("Apply suggestions", true, v -> {
             List<RectF> zones = Zones.load(prefs);
             zones.addAll(hot);
             Zones.save(prefs, zones);
-            prefs.edit().putInt(Prefs.ZONE_DP, fZone).putInt(Prefs.LEVEL, fLevel).apply();
+            prefs.edit().putInt(Prefs.ZONE_DP, fZone).putInt(Prefs.LEVEL, fLevel)
+                    .putInt(Prefs.CASCADE_MS, fCascade).apply();
             MainActivity.needsRebuild = true;
             finish();
         }));

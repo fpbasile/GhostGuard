@@ -23,7 +23,7 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private Ui ui;
-    private TextView statusText, statusSub, blockedNum, passedNum, zonesSub, rulesSub, heatSub;
+    private TextView statusText, statusSub, blockedNum, passedNum, zonesSub, rulesSub, heatSub, statsSub;
     private View statusDot;
     private Button accessButton, pauseButton;
 
@@ -53,9 +53,17 @@ public class MainActivity extends Activity {
                 v -> startActivity(new Intent(this, AppRulesActivity.class)));
         rulesSub = sub(r);
         zones.addView(r);
+        zones.addView(ui.divider());
+        View st = ui.navRow("▮", "Statistics", null,
+                v -> startActivity(new Intent(this, StatsActivity.class)));
+        statsSub = sub(st);
+        zones.addView(st);
         root.addView(zones);
 
         LinearLayout prot = ui.card("Protection");
+        prot.addView(toggle("Keyboard lock", "Block the whole top zone while typing",
+                Prefs.KEYBOARD_LOCK, true));
+        prot.addView(ui.divider());
         prot.addView(toggle("Flash red when blocking", "Brief red flash on each blocked touch",
                 Prefs.FLASH, true));
         prot.addView(ui.divider());
@@ -71,6 +79,11 @@ public class MainActivity extends Activity {
         LinearLayout tune = ui.card("Tuning");
         tune.addView(slider("Top zone height", 40, 400, Prefs.ZONE_DP, 120, "%d dp"));
         tune.addView(slider("Strictness", 1, 5, Prefs.LEVEL, 3, "%d / 5"));
+        tune.addView(slider("Cascade guard", 0, 2000, Prefs.CASCADE_MS, 700, "%d ms"));
+        TextView cg = ui.label("Blocks the top zone for a moment after you touch elsewhere — "
+                + "ghosts that your own taps set off.", 13, ui.muted, false);
+        cg.setPadding(0, 0, 0, ui.dp(4));
+        tune.addView(cg);
         root.addView(tune);
 
         LinearLayout disp = ui.card("Display");
@@ -149,6 +162,11 @@ public class MainActivity extends Activity {
                 : hits + " ghost touches recorded · tap to view");
         int rules = 0;
         for (String k : prefs.getAll().keySet()) if (k.startsWith(Prefs.APP_PREFIX)) rules++;
+        int[] week = Stats.lastDays(Stats.load(prefs), 7);
+        int sum = 0;
+        for (int v : week) sum += v;
+        statsSub.setText(sum == 0 ? "Ghosts per day, hour and app"
+                : week[6] + " today · " + sum + " this week");
         rulesSub.setText(rules == 0 ? "Turn off or tighten the filter per app"
                 : rules + (rules == 1 ? " app" : " apps") + " with a custom rule");
     }
@@ -251,6 +269,10 @@ public class MainActivity extends Activity {
         return col;
     }
 
+    private static String fmtValue(String fmt, int v) {
+        return v == 0 ? "Off" : String.format(fmt, v);
+    }
+
     private View toggle(String title, String subtitle, String key, boolean def) {
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -278,7 +300,7 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.addView(ui.label(title, 16, ui.onSurface, false), new LinearLayout.LayoutParams(0, -2, 1));
         int cur = prefs.getInt(key, def);
-        TextView value = ui.label(String.format(fmt, cur), 15, ui.accent, true);
+        TextView value = ui.label(fmtValue(fmt, cur), 15, ui.accent, true);
         row.addView(value);
         col.addView(row);
 
@@ -291,7 +313,7 @@ public class MainActivity extends Activity {
         sb.setPadding(ui.dp(4), ui.dp(10), ui.dp(4), ui.dp(4));
         sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar s, int p, boolean u) {
-                value.setText(String.format(fmt, p));
+                value.setText(fmtValue(fmt, p));
             }
             @Override public void onStartTrackingTouch(SeekBar s) {}
             @Override public void onStopTrackingTouch(SeekBar s) {

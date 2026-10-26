@@ -38,6 +38,9 @@ things saved are your settings and the blocked/passed counters.
 | **Ghost heatmap** | See where ghost touches land; turn hotspots into zones in one tap |
 | **Learning mode** | 3-min stress test (color flashes, strobe, vibration, brightness) that records ghosts and suggests settings |
 | **Per-app rules** | Default / Strict / Off for each app |
+| **Cascade guard** | Blocks the top zone for a moment after you touch elsewhere (ghosts set off by your own taps) |
+| **Keyboard lock** | Blocks the whole top zone while the keyboard is open |
+| **Statistics** | Ghosts per day, per hour of the day and per app |
 | **Block system gestures** | Stops the back swipe and shade pull from starting inside zones |
 | **Notification shade** | Swipe down from the top still opens notifications / quick settings |
 | **Shrink screen** | Shrinks the display with two equal black bars to hide the broken area |
@@ -113,6 +116,7 @@ src/com/ghostguard/
   ZoneEditorActivity.java custom zone editor (Zones)
   Ui.java              shared Material You styling
   DisplayResizer.java  shrink-screen helper
+  StatsActivity.java   statistics screen (Stats)
   ToggleTile.java      Quick Settings tile
   Prefs.java           shared preference keys
 res/                   icons, strings, accessibility config

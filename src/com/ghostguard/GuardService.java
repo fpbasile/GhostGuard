@@ -18,6 +18,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityWindowInfo;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -48,6 +49,12 @@ public class GuardService extends AccessibilityService
 
     // Règle de l'app au premier plan : off / default / strict.
     private String appMode = AppRules.DEFAULT;
+    private String currentPkg = "";
+
+    // Garde anti-cascade : dernier appui réel ailleurs, et clavier ouvert.
+    private long lastOutsideTouch = Long.MIN_VALUE / 2;
+    private boolean keyboardUp;
+    private final ArrayList<String> pendingApps = new ArrayList<>();
 
     @Override
     protected void onServiceConnected() {
@@ -60,6 +67,14 @@ public class GuardService extends AccessibilityService
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            boolean up = false;
+            for (AccessibilityWindowInfo w : getWindows()) {
+                if (w.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) { up = true; break; }
+            }
+            keyboardUp = up;
+            return;
+        }
         if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
         CharSequence pkg = event.getPackageName(), cls = event.getClassName();
         if (pkg == null || cls == null) return;
@@ -69,7 +84,8 @@ public class GuardService extends AccessibilityService
         } catch (PackageManager.NameNotFoundException e) {
             return;
         }
-        String mode = AppRules.get(prefs, pkg.toString());
+        currentPkg = pkg.toString();
+        String mode = AppRules.get(prefs, currentPkg);
         if (!mode.equals(appMode)) {
             appMode = mode;
             applyPrefs();
@@ -89,7 +105,8 @@ public class GuardService extends AccessibilityService
 
     @Override
     public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
-        if (Prefs.BLOCKED.equals(key) || Prefs.PASSED.equals(key) || Prefs.HEAT.equals(key)) return;
+        if (Prefs.BLOCKED.equals(key) || Prefs.PASSED.equals(key) || Prefs.HEAT.equals(key)
+                || Prefs.STATS.equals(key)) return;
         applyPrefs();
     }
 
@@ -100,8 +117,13 @@ public class GuardService extends AccessibilityService
                 || AppRules.OFF.equals(appMode)) return;
 
         boolean full = prefs.getBoolean(Prefs.FULL, false);
-        addPane(new Shield(), 0, 0, WindowManager.LayoutParams.MATCH_PARENT,
+        Shield shield = new Shield();
+        addPane(shield, 0, 0, WindowManager.LayoutParams.MATCH_PARENT,
                 full ? WindowManager.LayoutParams.MATCH_PARENT : zonePx());
+        // Être prévenu (sans coordonnées) de chaque appui hors de la zone du haut.
+        WindowManager.LayoutParams slp = (WindowManager.LayoutParams) shield.getLayoutParams();
+        slp.flags |= WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
+        wm.updateViewLayout(shield, slp);
 
         Rect screen = wm.getMaximumWindowMetrics().getBounds();
         for (RectF z : Zones.load(prefs)) {
@@ -175,6 +197,7 @@ public class GuardService extends AccessibilityService
         pendingBlocked++;
         Rect screen = wm.getMaximumWindowMetrics().getBounds();
         pendingHeat.add(new float[]{rawX / screen.width(), rawY / screen.height()});
+        pendingApps.add(currentPkg);
         p.flash();
         scheduleFlush();
     }
@@ -198,6 +221,10 @@ public class GuardService extends AccessibilityService
             for (float[] h : pendingHeat) Heat.add(g, h[0], h[1]);
             Heat.save(prefs, g);
             pendingHeat.clear();
+        }
+        if (!pendingApps.isEmpty()) {
+            Stats.record(prefs, pendingApps, System.currentTimeMillis());
+            pendingApps.clear();
         }
         prefs.edit()
                 .putLong(Prefs.BLOCKED, prefs.getLong(Prefs.BLOCKED, 0) + pendingBlocked)
@@ -320,6 +347,10 @@ public class GuardService extends AccessibilityService
             int level = level();
             int zone = zonePx();
 
+            if (e.getActionMasked() == MotionEvent.ACTION_OUTSIDE) {
+                lastOutsideTouch = now;
+                return false;
+            }
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN: {
                     pts.clear();
@@ -328,6 +359,12 @@ public class GuardService extends AccessibilityService
                     float x = e.getRawX(), y = e.getRawY();
                     startInTop = y < zone;
                     suspect = noteDownAndCheckBurst(now, startInTop);
+                    if (startInTop) {
+                        // Juste après un vrai appui ailleurs : c'est la cascade.
+                        if (now - lastOutsideTouch < prefs.getInt(Prefs.CASCADE_MS, 700)) suspect = true;
+                        // Clavier ouvert : la zone du haut est verrouillée.
+                        if (keyboardUp && prefs.getBoolean(Prefs.KEYBOARD_LOCK, true)) suspect = true;
+                    }
                     pts.add(new float[]{x, y, 0});
                     return true;
                 }
@@ -381,6 +418,8 @@ public class GuardService extends AccessibilityService
                 reportBlocked(this, pts.get(0)[0], pts.get(0)[1]);
             } else {
                 reportPassed();
+                // En plein écran, nos propres appuis acceptés servent de repère anti-cascade.
+                if (!startInTop) lastOutsideTouch = SystemClock.uptimeMillis();
                 replay(new ArrayList<>(pts), duration, startInTop);
             }
             pts.clear();
