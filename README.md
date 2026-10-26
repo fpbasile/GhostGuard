@@ -34,7 +34,7 @@ is **too short** to be a finger, **teleports** across the screen in a single fra
 
 ## Install
 
-1. Build the APK (see [Build](#build)).
+1. Download `GhostGuard.apk` from [Releases](https://github.com/fpbasile/GhostGuard/releases/latest), or [build it](#build).
 2. Install it, open **GhostGuard**, tap **Open accessibility settings** and enable it.
 3. If the toggle is greyed out: *Settings → Apps → GhostGuard → ⋮ → Allow restricted settings*.
 
