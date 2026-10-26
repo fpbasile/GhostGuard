@@ -2,7 +2,9 @@ package com.ghostguard;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
+import android.content.ComponentName;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
@@ -19,6 +21,7 @@ import android.view.accessibility.AccessibilityEvent;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Pose une vitre invisible (overlay d'accessibilité) sur la zone protégée.
@@ -41,6 +44,10 @@ public class GuardService extends AccessibilityService
     private long burstUntil;
 
     private int pendingBlocked, pendingPassed;
+    private final ArrayList<float[]> pendingHeat = new ArrayList<>();
+
+    // Règle de l'app au premier plan : off / default / strict.
+    private String appMode = AppRules.DEFAULT;
 
     @Override
     protected void onServiceConnected() {
@@ -52,7 +59,22 @@ public class GuardService extends AccessibilityService
     }
 
     @Override
-    public void onAccessibilityEvent(AccessibilityEvent event) {}
+    public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
+        CharSequence pkg = event.getPackageName(), cls = event.getClassName();
+        if (pkg == null || cls == null) return;
+        // Seules les vraies activités comptent (pas les popups, claviers, volet…).
+        try {
+            getPackageManager().getActivityInfo(new ComponentName(pkg.toString(), cls.toString()), 0);
+        } catch (PackageManager.NameNotFoundException e) {
+            return;
+        }
+        String mode = AppRules.get(prefs, pkg.toString());
+        if (!mode.equals(appMode)) {
+            appMode = mode;
+            applyPrefs();
+        }
+    }
 
     @Override
     public void onInterrupt() {}
@@ -67,14 +89,15 @@ public class GuardService extends AccessibilityService
 
     @Override
     public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
-        if (Prefs.BLOCKED.equals(key) || Prefs.PASSED.equals(key)) return;
+        if (Prefs.BLOCKED.equals(key) || Prefs.PASSED.equals(key) || Prefs.HEAT.equals(key)) return;
         applyPrefs();
     }
 
     private void applyPrefs() {
         removeShields();
         // Pendant l'édition des zones, on s'efface pour laisser dessiner.
-        if (!prefs.getBoolean(Prefs.ENABLED, true) || prefs.getBoolean(Prefs.EDITING, false)) return;
+        if (!prefs.getBoolean(Prefs.ENABLED, true) || prefs.getBoolean(Prefs.EDITING, false)
+                || AppRules.OFF.equals(appMode)) return;
 
         boolean full = prefs.getBoolean(Prefs.FULL, false);
         addPane(new Shield(), 0, 0, WindowManager.LayoutParams.MATCH_PARENT,
@@ -111,6 +134,10 @@ public class GuardService extends AccessibilityService
         panes.clear();
     }
 
+    private int level() {
+        return AppRules.STRICT.equals(appMode) ? 5 : prefs.getInt(Prefs.LEVEL, 3);
+    }
+
     private int zonePx() {
         return Math.round(prefs.getInt(Prefs.ZONE_DP, 120) * density);
     }
@@ -129,7 +156,7 @@ public class GuardService extends AccessibilityService
 
     /** Enregistre un appui et dit si on est en pleine rafale de fantômes. */
     private boolean noteDownAndCheckBurst(long now, boolean inTop) {
-        int level = prefs.getInt(Prefs.LEVEL, 3);
+        int level = level();
         long window = 700 + level * 100;               // 0.8 s .. 1.2 s
         int topLimit = Math.max(2, 5 - level / 2);     // 4 .. 3 appuis
         int allLimit = topLimit + 3;
@@ -144,8 +171,10 @@ public class GuardService extends AccessibilityService
         return now < burstUntil;
     }
 
-    private void reportBlocked(Pane p) {
+    private void reportBlocked(Pane p, float rawX, float rawY) {
         pendingBlocked++;
+        Rect screen = wm.getMaximumWindowMetrics().getBounds();
+        pendingHeat.add(new float[]{rawX / screen.width(), rawY / screen.height()});
         p.flash();
         scheduleFlush();
     }
@@ -164,6 +193,12 @@ public class GuardService extends AccessibilityService
 
     private void flushStats() {
         if (prefs == null || (pendingBlocked == 0 && pendingPassed == 0)) return;
+        if (!pendingHeat.isEmpty()) {
+            int[] g = Heat.load(prefs);
+            for (float[] h : pendingHeat) Heat.add(g, h[0], h[1]);
+            Heat.save(prefs, g);
+            pendingHeat.clear();
+        }
         prefs.edit()
                 .putLong(Prefs.BLOCKED, prefs.getLong(Prefs.BLOCKED, 0) + pendingBlocked)
                 .putLong(Prefs.PASSED, prefs.getLong(Prefs.PASSED, 0) + pendingPassed)
@@ -234,6 +269,14 @@ public class GuardService extends AccessibilityService
 
         boolean showGreen() { return prefs.getBoolean(Prefs.SHOW, false); }
 
+        @Override
+        protected void onLayout(boolean changed, int l, int t, int r, int b) {
+            super.onLayout(changed, l, t, r, b);
+            // Empêche le geste « retour » de démarrer dans la zone (bords gauche/droit).
+            setSystemGestureExclusionRects(prefs.getBoolean(Prefs.NAV_BLOCK, false)
+                    ? List.of(new Rect(0, 0, r - l, b - t)) : List.of());
+        }
+
         void updateTint() {
             if (SystemClock.uptimeMillis() < flashUntil) {
                 setBackgroundColor(Color.argb(70, 255, 40, 40));
@@ -251,7 +294,9 @@ public class GuardService extends AccessibilityService
         public boolean onTouchEvent(MotionEvent e) {
             int a = e.getActionMasked();
             if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_POINTER_DOWN) {
-                reportBlocked(this);
+                int i = e.getActionIndex();
+                float offX = e.getRawX() - e.getX(), offY = e.getRawY() - e.getY();
+                reportBlocked(this, e.getX(i) + offX, e.getY(i) + offY);
             }
             return true;
         }
@@ -272,7 +317,7 @@ public class GuardService extends AccessibilityService
         @Override
         public boolean onTouchEvent(MotionEvent e) {
             long now = SystemClock.uptimeMillis();
-            int level = prefs.getInt(Prefs.LEVEL, 3);
+            int level = level();
             int zone = zonePx();
 
             switch (e.getActionMasked()) {
@@ -333,7 +378,7 @@ public class GuardService extends AccessibilityService
             long minMs = startInTop ? 20 + level * 10 : 10 + level * 5;
             if (SystemClock.uptimeMillis() < burstUntil && startInTop) suspect = true;
             if (suspect || duration < minMs) {
-                reportBlocked(this);
+                reportBlocked(this, pts.get(0)[0], pts.get(0)[1]);
             } else {
                 reportPassed();
                 replay(new ArrayList<>(pts), duration, startInTop);

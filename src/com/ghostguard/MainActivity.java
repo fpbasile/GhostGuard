@@ -1,11 +1,10 @@
 package com.ghostguard;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
-import android.content.res.Configuration;
-import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.provider.Settings;
@@ -14,113 +13,114 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 
 public class MainActivity extends Activity {
-    private SharedPreferences prefs;
-    private TextView statusText, blockedNum, passedNum, zonesText;
-    private View statusDot;
-    private Button statusButton;
+    /** Set by other screens after they change settings shown here. */
+    static boolean needsRebuild;
 
-    // Material You colors, picked for light or dark mode.
-    private int bg, surface, onSurface, muted, accent, onAccent, good, warn;
+    private SharedPreferences prefs;
+    private Ui ui;
+    private TextView statusText, statusSub, blockedNum, passedNum, zonesSub, rulesSub, heatSub;
+    private View statusDot;
+    private Button accessButton, pauseButton;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         prefs = Prefs.get(this);
-        loadColors();
-        getWindow().setStatusBarColor(bg);
-        getWindow().setNavigationBarColor(bg);
-
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(40), dp(20), dp(32));
-        root.setBackgroundColor(bg);
+        ui = new Ui(this);
+        LinearLayout root = ui.page();
 
         root.addView(header());
-        root.addView(statusCard());
+        root.addView(heroCard());
+        root.addView(learnCard());
 
-        LinearLayout prot = card("Protection");
-        prot.addView(toggle("Filter enabled", "Analyze touches and drop ghost taps",
-                Prefs.ENABLED, true));
-        prot.addView(divider());
+        LinearLayout zones = ui.card("Zones & tools");
+        View z = ui.navRow("▦", "Custom zones", null,
+                v -> startActivity(new Intent(this, ZoneEditorActivity.class)));
+        zonesSub = sub(z);
+        zones.addView(z);
+        zones.addView(ui.divider());
+        View h = ui.navRow("◉", "Ghost heatmap", null,
+                v -> startActivity(new Intent(this, HeatmapActivity.class)));
+        heatSub = sub(h);
+        zones.addView(h);
+        zones.addView(ui.divider());
+        View r = ui.navRow("☰", "Per-app rules", null,
+                v -> startActivity(new Intent(this, AppRulesActivity.class)));
+        rulesSub = sub(r);
+        zones.addView(r);
+        root.addView(zones);
+
+        LinearLayout prot = ui.card("Protection");
         prot.addView(toggle("Flash red when blocking", "Brief red flash on each blocked touch",
                 Prefs.FLASH, true));
-        prot.addView(divider());
-        prot.addView(toggle("Show zones", "Green tint over protected areas",
-                Prefs.SHOW, false));
-        prot.addView(divider());
+        prot.addView(ui.divider());
+        prot.addView(toggle("Show zones", "Green tint over protected areas", Prefs.SHOW, false));
+        prot.addView(ui.divider());
+        prot.addView(toggle("Block system gestures", "No back swipe or shade pull from zones",
+                Prefs.NAV_BLOCK, false));
+        prot.addView(ui.divider());
         prot.addView(toggle("Filter whole screen", "Slower: gestures replay after release",
                 Prefs.FULL, false));
         root.addView(prot);
 
-        LinearLayout tune = card("Tuning");
+        LinearLayout tune = ui.card("Tuning");
         tune.addView(slider("Top zone height", 40, 400, Prefs.ZONE_DP, 120, "%d dp"));
         tune.addView(slider("Strictness", 1, 5, Prefs.LEVEL, 3, "%d / 5"));
         root.addView(tune);
 
-        LinearLayout custom = card("Custom zones");
-        zonesText = label("", 14, muted, false);
-        zonesText.setPadding(0, 0, 0, dp(12));
-        custom.addView(zonesText);
-        Button edit = new Button(this);
-        edit.setText("Edit zones");
-        edit.setAllCaps(false);
-        edit.setTextColor(onAccent);
-        edit.setBackground(rounded(accent, dp(24)));
-        edit.setOnClickListener(v -> startActivity(new Intent(this, ZoneEditorActivity.class)));
-        custom.addView(edit, new LinearLayout.LayoutParams(-1, dp(48)));
-        root.addView(custom);
-
-        LinearLayout disp = card("Display");
+        LinearLayout disp = ui.card("Display");
         disp.addView(toggle("Shrink screen", "Two equal black bars hide the broken area",
                 Prefs.SHRINK, false));
         disp.addView(slider("Bar height", 20, 300, Prefs.BAR_DP, 110, "%d dp"));
         root.addView(disp);
-        prefs.registerOnSharedPreferenceChangeListener(shrinkListener);
+        prefs.registerOnSharedPreferenceChangeListener(listener);
 
-        root.addView(statsCard());
-
-        TextView tip = label("Tip: add the GhostGuard tile to Quick Settings to pause it quickly.",
-                13, muted, false);
-        tip.setGravity(Gravity.CENTER);
-        tip.setPadding(dp(8), dp(16), dp(8), 0);
-        root.addView(tip);
-
-        ScrollView sv = new ScrollView(this);
-        sv.setBackgroundColor(bg);
-        sv.setFitsSystemWindows(true);
-        sv.addView(root);
-        setContentView(sv);
+        TextView foot = ui.label("No internet · nothing leaves your phone\n"
+                + "Tip: add the GhostGuard tile to Quick Settings", 13, ui.muted, false);
+        foot.setGravity(Gravity.CENTER);
+        foot.setLineSpacing(0, 1.3f);
+        foot.setPadding(ui.dp(8), ui.dp(12), ui.dp(8), 0);
+        root.addView(foot);
     }
 
-    private final SharedPreferences.OnSharedPreferenceChangeListener shrinkListener = (sp, key) -> {
-        if (!Prefs.SHRINK.equals(key) && !Prefs.BAR_DP.equals(key)) return;
-        int bar = sp.getBoolean(Prefs.SHRINK, false) ? dp(sp.getInt(Prefs.BAR_DP, 110)) : 0;
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (needsRebuild) {
+            needsRebuild = false;
+            recreate();
+            return;
+        }
+        refresh();
+    }
+
+    @Override
+    protected void onDestroy() {
+        prefs.unregisterOnSharedPreferenceChangeListener(listener);
+        super.onDestroy();
+    }
+
+    private final SharedPreferences.OnSharedPreferenceChangeListener listener = (sp, key) -> {
+        if (Prefs.SHRINK.equals(key) || Prefs.BAR_DP.equals(key)) applyShrink(sp);
+        if (Prefs.BLOCKED.equals(key) || Prefs.PASSED.equals(key) || Prefs.ENABLED.equals(key)
+                || Prefs.LEVEL.equals(key) || Prefs.ZONE_DP.equals(key)) refresh();
+    };
+
+    private void applyShrink(SharedPreferences sp) {
+        int bar = sp.getBoolean(Prefs.SHRINK, false) ? ui.dp(sp.getInt(Prefs.BAR_DP, 110)) : 0;
         if (!DisplayResizer.apply(this, bar)) {
-            new android.app.AlertDialog.Builder(this)
+            new AlertDialog.Builder(this)
                     .setTitle("Permission needed")
                     .setMessage("Connect the phone to a computer and run once:\n\n"
                             + "adb shell pm grant com.ghostguard android.permission.WRITE_SECURE_SETTINGS")
                     .setPositiveButton("OK", null)
                     .show();
         }
-    };
-
-    @Override
-    protected void onDestroy() {
-        prefs.unregisterOnSharedPreferenceChangeListener(shrinkListener);
-        super.onDestroy();
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        refresh();
     }
 
     private void refresh() {
@@ -128,16 +128,29 @@ public class MainActivity extends Activity {
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
         boolean on = enabled != null && enabled.contains(getPackageName());
         boolean paused = !prefs.getBoolean(Prefs.ENABLED, true);
-        int color = !on ? warn : paused ? muted : good;
+        int color = !on ? ui.warn : paused ? ui.muted : ui.good;
         statusText.setText(!on ? "Service is off" : paused ? "Paused" : "Protecting your screen");
+        int zoneCount = Zones.load(prefs).size();
+        statusSub.setText(prefs.getInt(Prefs.ZONE_DP, 120) + " dp top zone · strictness "
+                + prefs.getInt(Prefs.LEVEL, 3) + "/5 · " + zoneCount
+                + (zoneCount == 1 ? " custom zone" : " custom zones"));
         ((GradientDrawable) statusDot.getBackground()).setColor(color);
-        statusButton.setVisibility(on ? View.GONE : View.VISIBLE);
+        accessButton.setVisibility(on ? View.GONE : View.VISIBLE);
+        pauseButton.setVisibility(on ? View.VISIBLE : View.GONE);
+        pauseButton.setText(paused ? "Resume protection" : "Pause protection");
         blockedNum.setText(String.valueOf(prefs.getLong(Prefs.BLOCKED, 0)));
         passedNum.setText(String.valueOf(prefs.getLong(Prefs.PASSED, 0)));
-        int n = Zones.load(prefs).size();
-        zonesText.setText(n == 0
-                ? "Draw extra areas where every touch is blocked."
-                : n + (n == 1 ? " zone" : " zones") + " — every touch inside is blocked.");
+
+        zonesSub.setText(zoneCount == 0 ? "Draw areas where every touch is blocked"
+                : zoneCount + (zoneCount == 1 ? " zone" : " zones") + " · every touch inside is blocked");
+        int hits = 0;
+        for (int v : Heat.load(prefs)) hits += v;
+        heatSub.setText(hits == 0 ? "Where ghost touches land — nothing recorded yet"
+                : hits + " ghost touches recorded · tap to view");
+        int rules = 0;
+        for (String k : prefs.getAll().keySet()) if (k.startsWith(Prefs.APP_PREFIX)) rules++;
+        rulesSub.setText(rules == 0 ? "Turn off or tighten the filter per app"
+                : rules + (rules == 1 ? " app" : " apps") + " with a custom rule");
     }
 
     // --- Sections --------------------------------------------------------
@@ -145,105 +158,114 @@ public class MainActivity extends Activity {
     private View header() {
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(4), 0, 0, dp(20));
+        row.setPadding(0, ui.dp(8), 0, ui.dp(20));
         ImageView icon = new ImageView(this);
         icon.setImageResource(R.mipmap.ic_launcher_fg);
         icon.setScaleX(1.6f);
         icon.setScaleY(1.6f);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        row.addView(icon, new LinearLayout.LayoutParams(ui.dp(52), ui.dp(52)));
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(dp(14), 0, 0, 0);
-        col.addView(label("GhostGuard", 26, onSurface, true));
-        col.addView(label("Ghost touch blocker", 14, muted, false));
+        col.setPadding(ui.dp(14), 0, 0, 0);
+        col.addView(ui.label("GhostGuard", 28, ui.onSurface, true));
+        col.addView(ui.label("Ghost touch blocker", 14, ui.muted, false));
         row.addView(col);
         return row;
     }
 
-    private View statusCard() {
-        LinearLayout c = card(null);
+    private View heroCard() {
+        LinearLayout c = ui.card(null);
+        c.setPadding(ui.dp(20), ui.dp(20), ui.dp(20), ui.dp(18));
+
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
         statusDot = new View(this);
         GradientDrawable dot = new GradientDrawable();
         dot.setShape(GradientDrawable.OVAL);
         statusDot.setBackground(dot);
-        row.addView(statusDot, new LinearLayout.LayoutParams(dp(12), dp(12)));
-        statusText = label("", 17, onSurface, true);
-        statusText.setPadding(dp(12), 0, 0, 0);
+        row.addView(statusDot, new LinearLayout.LayoutParams(ui.dp(12), ui.dp(12)));
+        statusText = ui.label("", 19, ui.onSurface, true);
+        statusText.setPadding(ui.dp(12), 0, 0, 0);
         row.addView(statusText);
         c.addView(row);
 
-        statusButton = new Button(this);
-        statusButton.setText("Open accessibility settings");
-        statusButton.setAllCaps(false);
-        statusButton.setTextColor(onAccent);
-        statusButton.setBackground(rounded(accent, dp(24)));
-        statusButton.setOnClickListener(v ->
-                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
-        lp.topMargin = dp(14);
-        c.addView(statusButton, lp);
-        return c;
-    }
+        statusSub = ui.label("", 13, ui.muted, false);
+        statusSub.setPadding(ui.dp(24), ui.dp(4), 0, ui.dp(16));
+        c.addView(statusSub);
 
-    private View statsCard() {
-        LinearLayout c = card("Activity");
-        LinearLayout row = new LinearLayout(this);
-        blockedNum = label("0", 32, warn, true);
-        passedNum = label("0", 32, good, true);
-        row.addView(stat(blockedNum, "Blocked"), new LinearLayout.LayoutParams(0, -2, 1));
-        row.addView(stat(passedNum, "Passed"), new LinearLayout.LayoutParams(0, -2, 1));
-        c.addView(row);
-
-        TextView reset = label("Reset counters", 14, accent, true);
-        reset.setPadding(0, dp(14), 0, dp(4));
+        LinearLayout stats = new LinearLayout(this);
+        blockedNum = ui.label("0", 34, ui.warn, true);
+        passedNum = ui.label("0", 34, ui.good, true);
+        stats.addView(stat(blockedNum, "Blocked"), new LinearLayout.LayoutParams(0, -2, 1));
+        stats.addView(stat(passedNum, "Passed"), new LinearLayout.LayoutParams(0, -2, 1));
+        TextView reset = ui.label("Reset", 14, ui.accent, true);
+        reset.setPadding(ui.dp(12), ui.dp(8), ui.dp(4), ui.dp(8));
         reset.setOnClickListener(v -> {
             prefs.edit().putLong(Prefs.BLOCKED, 0).putLong(Prefs.PASSED, 0).apply();
             refresh();
         });
-        c.addView(reset);
+        stats.addView(reset);
+        c.addView(stats);
+
+        accessButton = ui.button("Open accessibility settings", true,
+                v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        pauseButton = ui.button("", false, v ->
+                prefs.edit().putBoolean(Prefs.ENABLED, !prefs.getBoolean(Prefs.ENABLED, true)).apply());
+        ((LinearLayout.LayoutParams) accessButton.getLayoutParams()).topMargin = ui.dp(16);
+        ((LinearLayout.LayoutParams) pauseButton.getLayoutParams()).topMargin = ui.dp(16);
+        c.addView(accessButton);
+        c.addView(pauseButton);
+        return c;
+    }
+
+    private View learnCard() {
+        LinearLayout c = ui.card(null);
+        c.setBackground(ui.rounded(ui.accentSoft, ui.dp(24)));
+        c.addView(ui.label("Auto-tune in 3 minutes", 18, ui.onSurface, true));
+        TextView t = ui.label("Leave the phone alone while it flashes colors and vibrates. "
+                + "GhostGuard records every ghost touch and suggests the best settings.",
+                14, ui.muted, false);
+        t.setPadding(0, ui.dp(4), 0, ui.dp(6));
+        t.setLineSpacing(0, 1.2f);
+        c.addView(t);
+        c.addView(ui.button("Start learning mode", true,
+                v -> startActivity(new Intent(this, LearnActivity.class))));
         return c;
     }
 
     // --- Building blocks -------------------------------------------------
 
-    private LinearLayout card(String title) {
-        LinearLayout c = new LinearLayout(this);
-        c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(18), dp(16), dp(18), dp(16));
-        c.setBackground(rounded(surface, dp(20)));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.bottomMargin = dp(12);
-        c.setLayoutParams(lp);
-        if (title != null) {
-            TextView t = label(title.toUpperCase(), 12, accent, true);
-            t.setLetterSpacing(0.08f);
-            t.setPadding(0, 0, 0, dp(8));
-            c.addView(t);
-        }
-        return c;
+    /** The subtitle TextView of a navRow, to update later. */
+    private TextView sub(View navRow) {
+        LinearLayout col = (LinearLayout) ((LinearLayout) navRow).getChildAt(1);
+        TextView t = ui.label("", 13, ui.muted, false);
+        col.addView(t);
+        return t;
     }
 
-    private View toggle(String title, String sub, String key, boolean def) {
-        LinearLayout row = new LinearLayout(this);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, dp(10), 0, dp(10));
+    private View stat(TextView num, String name) {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.addView(label(title, 16, onSurface, false));
-        col.addView(label(sub, 13, muted, false));
+        col.addView(num);
+        col.addView(ui.label(name, 13, ui.muted, false));
+        return col;
+    }
+
+    private View toggle(String title, String subtitle, String key, boolean def) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, ui.dp(12), 0, ui.dp(12));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.addView(ui.label(title, 16, ui.onSurface, false));
+        col.addView(ui.label(subtitle, 13, ui.muted, false));
         row.addView(col, new LinearLayout.LayoutParams(0, -2, 1));
 
         Switch s = new Switch(this);
         s.setChecked(prefs.getBoolean(key, def));
-        s.setThumbTintList(stateColors(accent, muted));
-        s.setTrackTintList(stateColors(accent, muted));
-        s.setOnCheckedChangeListener((v, c) -> {
-            prefs.edit().putBoolean(key, c).apply();
-            refresh();
-        });
+        s.setThumbTintList(ui.stateColors(ui.accent, ui.muted));
+        s.setTrackTintList(ui.stateColors(ui.accent, ui.muted));
+        s.setOnCheckedChangeListener((v, c) -> prefs.edit().putBoolean(key, c).apply());
         row.addView(s);
         row.setOnClickListener(v -> s.toggle());
         return row;
@@ -252,11 +274,11 @@ public class MainActivity extends Activity {
     private View slider(String title, int min, int max, String key, int def, String fmt) {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(0, dp(8), 0, dp(8));
+        col.setPadding(0, ui.dp(8), 0, ui.dp(8));
         LinearLayout row = new LinearLayout(this);
-        row.addView(label(title, 16, onSurface, false), new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(ui.label(title, 16, ui.onSurface, false), new LinearLayout.LayoutParams(0, -2, 1));
         int cur = prefs.getInt(key, def);
-        TextView value = label(String.format(fmt, cur), 15, accent, true);
+        TextView value = ui.label(String.format(fmt, cur), 15, ui.accent, true);
         row.addView(value);
         col.addView(row);
 
@@ -264,9 +286,9 @@ public class MainActivity extends Activity {
         sb.setMin(min);
         sb.setMax(max);
         sb.setProgress(cur);
-        sb.setProgressTintList(ColorStateList.valueOf(accent));
-        sb.setThumbTintList(ColorStateList.valueOf(accent));
-        sb.setPadding(dp(4), dp(10), dp(4), dp(4));
+        sb.setProgressTintList(ColorStateList.valueOf(ui.accent));
+        sb.setThumbTintList(ColorStateList.valueOf(ui.accent));
+        sb.setPadding(ui.dp(4), ui.dp(10), ui.dp(4), ui.dp(4));
         sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar s, int p, boolean u) {
                 value.setText(String.format(fmt, p));
@@ -278,61 +300,5 @@ public class MainActivity extends Activity {
         });
         col.addView(sb);
         return col;
-    }
-
-    private View stat(TextView num, String name) {
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.addView(num);
-        col.addView(label(name, 13, muted, false));
-        return col;
-    }
-
-    private View divider() {
-        View d = new View(this);
-        d.setBackgroundColor((muted & 0x00FFFFFF) | 0x26000000);
-        d.setLayoutParams(new LinearLayout.LayoutParams(-1, Math.max(1, dp(1) / 2)));
-        return d;
-    }
-
-    private TextView label(String s, int sp, int color, boolean bold) {
-        TextView t = new TextView(this);
-        t.setText(s);
-        t.setTextSize(sp);
-        t.setTextColor(color);
-        if (bold) t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        return t;
-    }
-
-    private GradientDrawable rounded(int color, int radius) {
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(color);
-        g.setCornerRadius(radius);
-        return g;
-    }
-
-    private ColorStateList stateColors(int on, int off) {
-        return new ColorStateList(
-                new int[][]{{android.R.attr.state_checked}, {}},
-                new int[]{on, off});
-    }
-
-    private void loadColors() {
-        boolean night = (getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-        bg = c(night ? android.R.color.system_neutral1_900 : android.R.color.system_neutral1_50);
-        surface = c(night ? android.R.color.system_neutral2_800 : android.R.color.system_neutral2_100);
-        onSurface = c(night ? android.R.color.system_neutral1_50 : android.R.color.system_neutral1_900);
-        muted = c(night ? android.R.color.system_neutral2_400 : android.R.color.system_neutral2_600);
-        accent = c(night ? android.R.color.system_accent1_200 : android.R.color.system_accent1_600);
-        onAccent = c(night ? android.R.color.system_accent1_800 : android.R.color.system_accent1_0);
-        good = night ? 0xFF81C995 : 0xFF1E8E3E;
-        warn = night ? 0xFFF28B82 : 0xFFD93025;
-    }
-
-    private int c(int res) { return getColor(res); }
-
-    private int dp(int v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
     }
 }

@@ -15,6 +15,9 @@ final class Prefs {
     static final String EDITING = "editing_zones";  // éditeur ouvert : vitres retirées
     static final String SHRINK = "shrink";          // réduire l'écran (bandes noires)
     static final String BAR_DP = "bar_dp";          // hauteur de chaque bande
+    static final String NAV_BLOCK = "nav_block";    // bloquer les gestes système dans les zones
+    static final String HEAT = "heat";              // carte de chaleur des fantômes
+    static final String APP_PREFIX = "app:";        // règle par app : off / default / strict
     static final String BLOCKED = "stat_blocked";
     static final String PASSED = "stat_passed";
 

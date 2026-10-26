@@ -34,6 +34,11 @@ things saved are your settings and the blocked/passed counters.
 | **Top zone filter** | Protected strip at the top, adjustable height (40–400 dp) |
 | **Whole-screen filter** | Optional: filter everywhere (gestures replay after release) |
 | **Strictness** | 1 (lenient) → 5 (strict) — tunes burst, duration and jump thresholds |
+| **Custom zones** | Draw rectangles anywhere; every touch inside is blocked |
+| **Ghost heatmap** | See where ghost touches land; turn hotspots into zones in one tap |
+| **Learning mode** | 3-min stress test (color flashes, strobe, vibration, brightness) that records ghosts and suggests settings |
+| **Per-app rules** | Default / Strict / Off for each app |
+| **Block system gestures** | Stops the back swipe and shade pull from starting inside zones |
 | **Notification shade** | Swipe down from the top still opens notifications / quick settings |
 | **Shrink screen** | Shrinks the display with two equal black bars to hide the broken area |
 | **Quick Settings tile** | Pause / resume in one tap |
@@ -92,6 +97,9 @@ Requires Android 12+ (minSdk 31).
 - Pinch-to-zoom does not pass through the protected zone.
 - Reinstalling the app disables the accessibility service — re-enable it afterwards.
 - Without root, Android always centers a shrunk display: bars are top **and** bottom.
+- The bottom home / recents swipe can't be blocked without root. Back-gesture blocking is
+  limited by Android to 200 dp of height per screen edge.
+- Learning mode uses rapid flashing lights — avoid it if you are photosensitive.
 
 ## Project layout
 
@@ -99,6 +107,11 @@ Requires Android 12+ (minSdk 31).
 src/com/ghostguard/
   GuardService.java    accessibility service: shield overlay, touch analysis, replay
   MainActivity.java    settings UI
+  LearnActivity.java   3-minute learning mode and suggestions
+  HeatmapActivity.java ghost heatmap screen (HeatView, Heat)
+  AppRulesActivity.java per-app rules (AppRules)
+  ZoneEditorActivity.java custom zone editor (Zones)
+  Ui.java              shared Material You styling
   DisplayResizer.java  shrink-screen helper
   ToggleTile.java      Quick Settings tile
   Prefs.java           shared preference keys
