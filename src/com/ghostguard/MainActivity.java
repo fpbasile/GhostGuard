@@ -127,9 +127,9 @@ public class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(4), 0, 0, dp(20));
         ImageView icon = new ImageView(this);
-        icon.setImageResource(R.mipmap.ic_launcher);
-        icon.setBackground(rounded(0xFFFFFFFF, dp(26)));
-        icon.setClipToOutline(true);
+        icon.setImageResource(R.mipmap.ic_launcher_fg);
+        icon.setScaleX(1.6f);
+        icon.setScaleY(1.6f);
         row.addView(icon, new LinearLayout.LayoutParams(dp(52), dp(52)));
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);

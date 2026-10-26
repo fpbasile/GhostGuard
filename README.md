@@ -4,7 +4,7 @@
 
 <h1 align="center">GhostGuard</h1>
 
-<p align="center">Block ghost touches from a damaged Android screen — no root needed.</p>
+<p align="center">Block ghost touches from a damaged Android screen — no root, no internet.</p>
 
 ---
 
@@ -19,6 +19,13 @@ GhostGuard puts an invisible shield over the affected area, inspects every touch
 A touch is treated as a ghost when it is part of a **burst** (several taps within ~1 s),
 is **too short** to be a finger, **teleports** across the screen in a single frame, or is a
 **second finger** suddenly appearing in the top zone.
+
+## Privacy
+
+**No internet needed — nothing leaves your phone.**
+GhostGuard does not request the `INTERNET` permission, so Android itself prevents it from
+going online. Touches are analyzed in memory and never stored or sent anywhere; the only
+things saved are your settings and the blocked/passed counters.
 
 ## Features
 
