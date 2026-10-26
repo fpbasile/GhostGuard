@@ -38,40 +38,59 @@ import java.util.Random;
 public class LearnActivity extends Activity {
     private static final long PHASE_MS = 15_000;
 
+    // What the user is asked to do during a phase.
+    private static final int NONE = 0, TAP = 1, HOLD = 2, SWIPE = 3, MOVING = 4;
+
     /** One stress pattern. Flags combine. */
     private static final class Phase {
-        final String name;
-        final int bg;            // base color
+        final String name, hint;
+        final int bg, task;      // base color, user task
         final boolean colors, strobe, sweep, brightPulse, vibrate, heavy;
         final float brightness;  // -1 = system
-        Phase(String name, int bg, float brightness, boolean colors, boolean strobe,
-              boolean sweep, boolean brightPulse, boolean vibrate, boolean heavy) {
-            this.name = name; this.bg = bg; this.brightness = brightness;
-            this.colors = colors; this.strobe = strobe; this.sweep = sweep;
-            this.brightPulse = brightPulse; this.vibrate = vibrate; this.heavy = heavy;
+        Phase(String name, String hint, int task, int bg, float brightness, boolean colors,
+              boolean strobe, boolean sweep, boolean brightPulse, boolean vibrate, boolean heavy) {
+            this.name = name; this.hint = hint; this.task = task; this.bg = bg;
+            this.brightness = brightness; this.colors = colors; this.strobe = strobe;
+            this.sweep = sweep; this.brightPulse = brightPulse; this.vibrate = vibrate; this.heavy = heavy;
         }
     }
 
+    private static final String HANDS_OFF = "Don't touch the screen";
     private static final Phase[] PHASES = {
-            new Phase("Calm · black", Color.BLACK, -1, false, false, false, false, false, false),
-            new Phase("Calm · white", Color.WHITE, -1, false, false, false, false, false, false),
-            new Phase("Color flashes", Color.BLACK, -1, true, false, false, false, false, false),
-            new Phase("Strobe", Color.BLACK, -1, false, true, false, false, false, false),
-            new Phase("Vibration bursts", Color.BLACK, -1, false, false, false, false, true, false),
-            new Phase("Colors + vibration", Color.BLACK, -1, true, false, false, false, true, false),
-            new Phase("Max brightness", Color.WHITE, 1f, false, false, false, false, false, false),
-            new Phase("Min brightness", Color.BLACK, 0.01f, false, false, false, false, false, false),
-            new Phase("Moving bars", Color.BLACK, -1, false, false, true, false, false, false),
-            new Phase("Heavy vibration + strobe", Color.BLACK, -1, false, true, false, false, true, true),
-            new Phase("Brightness pulse", Color.WHITE, -1, false, false, false, true, false, false),
-            new Phase("Everything at once", Color.BLACK, -1, true, false, true, true, true, true),
+            // Hands off: the screen and motor alone.
+            new Phase("Calm", HANDS_OFF, NONE, Color.BLACK, -1, false, false, false, false, false, false),
+            new Phase("Color flashes", HANDS_OFF, NONE, Color.BLACK, -1, true, false, false, false, false, false),
+            new Phase("Strobe + vibration", HANDS_OFF, NONE, Color.BLACK, -1, false, true, false, false, true, false),
+            new Phase("Brightness pulse", HANDS_OFF, NONE, Color.WHITE, -1, false, false, true, true, false, false),
+            new Phase("In your hand", "Hold the phone normally · don't touch the screen", NONE,
+                    Color.BLACK, -1, false, false, false, false, false, false),
+            // Your touches: ghosts that your own finger triggers elsewhere.
+            new Phase("Tapping", "Tap the green circle again and again", TAP,
+                    Color.BLACK, -1, false, false, false, false, false, false),
+            new Phase("Holding", "Keep your finger on the green circle", HOLD,
+                    Color.BLACK, -1, false, false, false, false, false, false),
+            new Phase("Swiping", "Swipe back and forth inside the green box", SWIPE,
+                    Color.BLACK, -1, false, false, false, false, false, false),
+            new Phase("Chasing", "Tap the green circle wherever it goes", MOVING,
+                    Color.BLACK, -1, false, false, false, false, false, false),
+            new Phase("Tapping + flashes", "Tap the green circle again and again", TAP,
+                    Color.BLACK, -1, true, false, false, false, false, false),
+            new Phase("Holding + vibration", "Keep your finger on the green circle", HOLD,
+                    Color.BLACK, -1, false, false, false, false, true, true),
+            new Phase("Everything at once", "Tap the green circle wherever it goes", MOVING,
+                    Color.BLACK, -1, true, false, true, true, true, false),
     };
 
     /** A recorded touch. Positions are screen fractions. */
     private static final class Touch {
         float x, y, moved;
         long down, duration;
+        boolean real;            // landed on the target during a touch phase
     }
+
+    // Current target in pixels (circle bounds or swipe box), and the previous one for MOVING.
+    private final RectF target = new RectF(), prevTarget = new RectF();
+    private long targetMovedAt;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random rnd = new Random();
@@ -91,9 +110,10 @@ public class LearnActivity extends Activity {
         vibrator = getSystemService(VibratorManager.class).getDefaultVibrator();
         new AlertDialog.Builder(this)
                 .setTitle("Learning mode · 3 min")
-                .setMessage("Put the phone flat on a table and don't touch the screen.\n\n"
-                        + "The screen will flash colors and strobe, and the phone will vibrate. "
-                        + "Every touch it registers is a ghost touch.\n\n"
+                .setMessage("Follow the instructions on screen: first hands off, then hold "
+                        + "the phone, then tap, hold and swipe on a green target.\n\n"
+                        + "Any touch that lands outside the target is a ghost touch. "
+                        + "The screen will flash and the phone will vibrate.\n\n"
                         + "⚠️ Contains rapid flashing lights. Don't look at it if you are "
                         + "sensitive to flashing.\n\nUse the back button to stop at any time.")
                 .setPositiveButton("Start", (d, w) -> begin())
@@ -124,10 +144,14 @@ public class LearnActivity extends Activity {
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (!running) return;
+            if (stage.getWidth() == 0) { handler.postDelayed(this, 40); return; }   // not laid out yet
             long t = SystemClock.uptimeMillis() - startedAt;
             int p = (int) (t / PHASE_MS);
             if (p >= PHASES.length) { done(); return; }
             if (p != phase) enterPhase(p);
+            if (PHASES[p].task == MOVING && SystemClock.uptimeMillis() - targetMovedAt > 1500) {
+                placeTarget(MOVING);
+            }
             stage.frame(t);
             handler.postDelayed(this, 40);
         }
@@ -143,6 +167,43 @@ public class LearnActivity extends Activity {
             vibrator.vibrate(VibrationEffect.createWaveform(timings, amps, 0));
         }
         setBrightness(ph.brightness);
+        placeTarget(ph.task);
+        if (p > 0) {
+            // Short buzz so a hands-off user notices the switch to a touch phase.
+            if (!ph.vibrate && PHASES[p - 1].task != ph.task) {
+                vibrator.vibrate(VibrationEffect.createOneShot(120, 255));
+            }
+        }
+    }
+
+    /** Targets live in the lower part of the screen, away from the broken top. */
+    private void placeTarget(int task) {
+        float w = stage.getWidth(), h = stage.getHeight();
+        float d = getResources().getDisplayMetrics().density, r = 48 * d;
+        prevTarget.set(target);
+        targetMovedAt = SystemClock.uptimeMillis();
+        if (task == SWIPE) {
+            target.set(w * 0.1f, h * 0.68f, w * 0.9f, h * 0.84f);
+        } else if (task == MOVING) {
+            float cx = r + rnd.nextFloat() * (w - 2 * r);
+            float cy = h * 0.62f + rnd.nextFloat() * (h * 0.26f);
+            target.set(cx - r, cy - r, cx + r, cy + r);
+        } else if (task != NONE) {
+            target.set(w / 2 - r, h * 0.76f - r, w / 2 + r, h * 0.76f + r);
+        } else {
+            target.setEmpty();
+        }
+    }
+
+    /** A finger-down counts as real if it lands on (or near) the current target. */
+    private boolean onTarget(float x, float y) {
+        if (PHASES[phase].task == NONE) return false;
+        float m = 28 * getResources().getDisplayMetrics().density;
+        if (x >= target.left - m && x <= target.right + m && y >= target.top - m && y <= target.bottom + m) return true;
+        // Grace period right after a moving target jumps.
+        return SystemClock.uptimeMillis() - targetMovedAt < 400
+                && x >= prevTarget.left - m && x <= prevTarget.right + m
+                && y >= prevTarget.top - m && y <= prevTarget.bottom + m;
     }
 
     private void setBrightness(float v) {
@@ -164,9 +225,12 @@ public class LearnActivity extends Activity {
                 t.x = e.getX(i) / w;
                 t.y = e.getY(i) / h;
                 t.down = e.getEventTime();
+                t.real = onTarget(e.getX(i), e.getY(i));
                 active.put(e.getPointerId(i), t);
                 touches.add(t);
-                stage.dot(e.getX(i), e.getY(i));
+                if (!t.real) stage.dot(e.getX(i), e.getY(i));
+                // Hit a moving target: send it somewhere else.
+                else if (PHASES[phase].task == MOVING) placeTarget(MOVING);
                 break;
             }
             case MotionEvent.ACTION_MOVE:
@@ -219,12 +283,29 @@ public class LearnActivity extends Activity {
         // Every ghost also goes into the long-term heatmap.
         int[] all = Heat.load(prefs);
         int[] grid = new int[Heat.COLS * Heat.ROWS];
-        for (Touch t : touches) { Heat.add(all, t.x, t.y); Heat.add(grid, t.x, t.y); }
+        for (Touch t : touches) {
+            if (t.real) continue;
+            Heat.add(all, t.x, t.y);
+            Heat.add(grid, t.x, t.y);
+        }
         Heat.save(prefs, all);
         showResults(grid);
     }
 
     private void showResults(int[] grid) {
+        // Share of ghosts that came within 1 s after one of your real touches.
+        ArrayList<Touch> ghosts = new ArrayList<>();
+        int afterYou = 0;
+        long lastReal = Long.MIN_VALUE / 2;
+        for (Touch t : touches) {
+            if (t.real) { lastReal = t.down; continue; }
+            ghosts.add(t);
+            if (t.down - lastReal < 1000) afterYou++;
+        }
+        touches.clear();
+        touches.addAll(ghosts);
+        float afterShare = ghosts.isEmpty() ? 0 : (float) afterYou / ghosts.size();
+
         Ui ui = new Ui(this);
         LinearLayout root = ui.page();
         root.addView(ui.title("Results", touches.size() + " ghost touches in 3 minutes", false));
@@ -269,6 +350,7 @@ public class LearnActivity extends Activity {
         Collections.sort(gaps);
         boolean bursty = gaps.size() >= 3 && gaps.get(gaps.size() / 2) < 400;
         if (bursty) level = Math.max(level, 3);
+        if (afterShare >= 0.5f) level = Math.max(level, 4);   // your touches set them off
 
         // Hotspots outside the top zone become custom zones.
         float topFrac = zoneDp * density / screenH;
@@ -296,6 +378,7 @@ public class LearnActivity extends Activity {
         facts.addView(fact(ui, "In the top of the screen", Math.round(topShare * 100) + "%"));
         facts.addView(fact(ui, "Typical ghost length", median + " ms"));
         facts.addView(fact(ui, "Come in bursts", bursty ? "Yes" : "No"));
+        facts.addView(fact(ui, "Right after your touches", Math.round(afterShare * 100) + "%"));
         facts.addView(fact(ui, "Worst trigger", PHASES[worst].name));
         root.addView(facts);
 
@@ -322,6 +405,12 @@ public class LearnActivity extends Activity {
         root.addView(note);
     }
 
+    private int ghostCount() {
+        int n = 0;
+        for (Touch t : touches) if (!t.real) n++;
+        return n;
+    }
+
     private View fact(Ui ui, String k, String v) {
         LinearLayout row = new LinearLayout(this);
         row.setPadding(0, ui.dp(8), 0, ui.dp(8));
@@ -334,7 +423,8 @@ public class LearnActivity extends Activity {
 
     private final class Stage extends View {
         private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG), dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG),
-                bar = new Paint(), pill = new Paint(Paint.ANTI_ALIAS_FLAG);
+                bar = new Paint(), pill = new Paint(Paint.ANTI_ALIAS_FLAG),
+                targetPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final ArrayList<float[]> dots = new ArrayList<>();   // x, y, time
         private int bg = Color.BLACK;
         private long t;
@@ -344,9 +434,10 @@ public class LearnActivity extends Activity {
             float d = getResources().getDisplayMetrics().density;
             text.setColor(Color.WHITE);
             text.setTextAlign(Paint.Align.CENTER);
-            text.setTextSize(18 * d);
+            text.setTextSize(16 * d);
             dotPaint.setColor(0xFFFF3B30);
             pill.setColor(0xB0000000);
+            targetPaint.setStrokeWidth(3 * d);
         }
 
         void dot(float x, float y) {
@@ -382,16 +473,28 @@ public class LearnActivity extends Activity {
                 c.drawCircle(p[0], p[1], 14 * d, dotPaint);
             }
 
+            if (ph.task != NONE && !target.isEmpty()) {
+                targetPaint.setStyle(Paint.Style.FILL);
+                targetPaint.setColor(0x6634A853);
+                if (ph.task == SWIPE) c.drawRoundRect(target, 24 * d, 24 * d, targetPaint);
+                else c.drawOval(target, targetPaint);
+                targetPaint.setStyle(Paint.Style.STROKE);
+                targetPaint.setColor(0xFF34A853);
+                if (ph.task == SWIPE) c.drawRoundRect(target, 24 * d, 24 * d, targetPaint);
+                else c.drawOval(target, targetPaint);
+            }
+
             long left = Math.max(0, PHASES.length * PHASE_MS - t) / 1000;
             String[] lines = {
-                    "Don't touch the screen",
+                    ph.hint,
                     String.format(Locale.US, "%d:%02d left · phase %d/%d", left / 60, left % 60,
                             phase + 1, PHASES.length),
                     ph.name,
-                    touches.size() + " ghost touches"};
-            float cy = getHeight() / 2f, lh = 30 * d;
-            RectF box = new RectF(getWidth() / 2f - 150 * d, cy - lh * 2 - 8 * d,
-                    getWidth() / 2f + 150 * d, cy + lh * 2 + 2 * d);
+                    ghostCount() + " ghost touches"};
+            float cy = getHeight() * 0.42f, lh = 30 * d;
+            float half = Math.min(getWidth() / 2f - 12 * d, 180 * d);
+            RectF box = new RectF(getWidth() / 2f - half, cy - lh * 2 - 8 * d,
+                    getWidth() / 2f + half, cy + lh * 2 + 2 * d);
             c.drawRoundRect(box, 20 * d, 20 * d, pill);
             for (int i = 0; i < lines.length; i++) {
                 text.setFakeBoldText(i == 0 || i == 3);
