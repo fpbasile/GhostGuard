@@ -6,6 +6,8 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -30,8 +32,7 @@ public class GuardService extends AccessibilityService
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager wm;
     private SharedPreferences prefs;
-    private Shield shield;
-    private WindowManager.LayoutParams lp;
+    private final ArrayList<Pane> panes = new ArrayList<>();
     private float density;
 
     // Détection de rafales : instants des derniers appuis.
@@ -59,7 +60,7 @@ public class GuardService extends AccessibilityService
     @Override
     public void onDestroy() {
         if (prefs != null) prefs.unregisterOnSharedPreferenceChangeListener(this);
-        removeShield();
+        removeShields();
         flushStats();
         super.onDestroy();
     }
@@ -71,44 +72,57 @@ public class GuardService extends AccessibilityService
     }
 
     private void applyPrefs() {
-        removeShield();
-        if (!prefs.getBoolean(Prefs.ENABLED, true)) return;
+        removeShields();
+        // Pendant l'édition des zones, on s'efface pour laisser dessiner.
+        if (!prefs.getBoolean(Prefs.ENABLED, true) || prefs.getBoolean(Prefs.EDITING, false)) return;
 
         boolean full = prefs.getBoolean(Prefs.FULL, false);
-        lp = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                full ? WindowManager.LayoutParams.MATCH_PARENT : zonePx(),
+        addPane(new Shield(), 0, 0, WindowManager.LayoutParams.MATCH_PARENT,
+                full ? WindowManager.LayoutParams.MATCH_PARENT : zonePx());
+
+        Rect screen = wm.getMaximumWindowMetrics().getBounds();
+        for (RectF z : Zones.load(prefs)) {
+            int l = Math.round(z.left * screen.width()), t = Math.round(z.top * screen.height());
+            int r = Math.round(z.right * screen.width()), b = Math.round(z.bottom * screen.height());
+            addPane(new Blocker(), l, t, Math.max(1, r - l), Math.max(1, b - t));
+        }
+    }
+
+    private void addPane(Pane v, int x, int y, int w, int h) {
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(w, h,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
-        lp.x = 0;
-        lp.y = 0;
+        lp.x = x;
+        lp.y = y;
         lp.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
-
-        shield = new Shield();
-        wm.addView(shield, lp);
+        wm.addView(v, lp);
+        panes.add(v);
     }
 
-    private void removeShield() {
-        if (shield != null) {
-            try { wm.removeView(shield); } catch (Exception ignored) {}
-            shield = null;
+    private void removeShields() {
+        for (Pane p : panes) {
+            try { wm.removeView(p); } catch (Exception ignored) {}
         }
+        panes.clear();
     }
 
     private int zonePx() {
         return Math.round(prefs.getInt(Prefs.ZONE_DP, 120) * density);
     }
 
+    /** Rend toutes les vitres traversables le temps de rejouer un geste. */
     private void setTouchable(boolean touchable) {
-        if (shield == null) return;
-        if (touchable) lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        else lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        try { wm.updateViewLayout(shield, lp); } catch (Exception ignored) {}
+        for (Pane p : panes) {
+            WindowManager.LayoutParams lp = (WindowManager.LayoutParams) p.getLayoutParams();
+            if (touchable) lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            else lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            try { wm.updateViewLayout(p, lp); } catch (Exception ignored) {}
+        }
     }
 
     // --- Analyse ---------------------------------------------------------
@@ -130,9 +144,9 @@ public class GuardService extends AccessibilityService
         return now < burstUntil;
     }
 
-    private void reportBlocked() {
+    private void reportBlocked(Pane p) {
         pendingBlocked++;
-        if (shield != null) shield.flash();
+        p.flash();
         scheduleFlush();
     }
 
@@ -205,32 +219,54 @@ public class GuardService extends AccessibilityService
 
     // --- La vitre --------------------------------------------------------
 
-    private final class Shield extends View {
-        private final ArrayList<float[]> pts = new ArrayList<>();
-        private int trackedId = -1;
-        private long downTime;
-        private boolean suspect;
-        private boolean startInTop;
+    /** Vitre de base : teinte verte (optionnelle) et flash rouge au blocage. */
+    private abstract class Pane extends View {
         private long flashUntil;
 
-        Shield() { super(GuardService.this); updateTint(); }
+        Pane() { super(GuardService.this); updateTint(); }
 
         void flash() {
+            if (!prefs.getBoolean(Prefs.FLASH, true)) return;
             flashUntil = SystemClock.uptimeMillis() + 250;
             updateTint();
             postDelayed(this::updateTint, 260);
         }
 
-        private void updateTint() {
-            boolean show = prefs.getBoolean(Prefs.SHOW, true);
-            boolean full = prefs.getBoolean(Prefs.FULL, false);
-            if (SystemClock.uptimeMillis() < flashUntil && show) {
+        boolean showGreen() { return prefs.getBoolean(Prefs.SHOW, false); }
+
+        void updateTint() {
+            if (SystemClock.uptimeMillis() < flashUntil) {
                 setBackgroundColor(Color.argb(70, 255, 40, 40));
-            } else if (show && !full) {
+            } else if (showGreen()) {
                 setBackgroundColor(Color.argb(28, 76, 175, 80));
             } else {
                 setBackgroundColor(Color.TRANSPARENT);
             }
+        }
+    }
+
+    /** Zone personnalisée : bloque tout, sans analyse. */
+    private final class Blocker extends Pane {
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {
+            int a = e.getActionMasked();
+            if (a == MotionEvent.ACTION_DOWN || a == MotionEvent.ACTION_POINTER_DOWN) {
+                reportBlocked(this);
+            }
+            return true;
+        }
+    }
+
+    private final class Shield extends Pane {
+        private final ArrayList<float[]> pts = new ArrayList<>();
+        private int trackedId = -1;
+        private long downTime;
+        private boolean suspect;
+        private boolean startInTop;
+
+        @Override
+        boolean showGreen() {
+            return super.showGreen() && !prefs.getBoolean(Prefs.FULL, false);
         }
 
         @Override
@@ -297,7 +333,7 @@ public class GuardService extends AccessibilityService
             long minMs = startInTop ? 20 + level * 10 : 10 + level * 5;
             if (SystemClock.uptimeMillis() < burstUntil && startInTop) suspect = true;
             if (suspect || duration < minMs) {
-                reportBlocked();
+                reportBlocked(this);
             } else {
                 reportPassed();
                 replay(new ArrayList<>(pts), duration, startInTop);

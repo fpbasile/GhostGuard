@@ -21,7 +21,7 @@ import android.widget.TextView;
 
 public class MainActivity extends Activity {
     private SharedPreferences prefs;
-    private TextView statusText, blockedNum, passedNum;
+    private TextView statusText, blockedNum, passedNum, zonesText;
     private View statusDot;
     private Button statusButton;
 
@@ -48,8 +48,11 @@ public class MainActivity extends Activity {
         prot.addView(toggle("Filter enabled", "Analyze touches and drop ghost taps",
                 Prefs.ENABLED, true));
         prot.addView(divider());
-        prot.addView(toggle("Show protected zone", "Green tint, flashes red when blocking",
-                Prefs.SHOW, true));
+        prot.addView(toggle("Flash red when blocking", "Brief red flash on each blocked touch",
+                Prefs.FLASH, true));
+        prot.addView(divider());
+        prot.addView(toggle("Show zones", "Green tint over protected areas",
+                Prefs.SHOW, false));
         prot.addView(divider());
         prot.addView(toggle("Filter whole screen", "Slower: gestures replay after release",
                 Prefs.FULL, false));
@@ -59,6 +62,19 @@ public class MainActivity extends Activity {
         tune.addView(slider("Top zone height", 40, 400, Prefs.ZONE_DP, 120, "%d dp"));
         tune.addView(slider("Strictness", 1, 5, Prefs.LEVEL, 3, "%d / 5"));
         root.addView(tune);
+
+        LinearLayout custom = card("Custom zones");
+        zonesText = label("", 14, muted, false);
+        zonesText.setPadding(0, 0, 0, dp(12));
+        custom.addView(zonesText);
+        Button edit = new Button(this);
+        edit.setText("Edit zones");
+        edit.setAllCaps(false);
+        edit.setTextColor(onAccent);
+        edit.setBackground(rounded(accent, dp(24)));
+        edit.setOnClickListener(v -> startActivity(new Intent(this, ZoneEditorActivity.class)));
+        custom.addView(edit, new LinearLayout.LayoutParams(-1, dp(48)));
+        root.addView(custom);
 
         LinearLayout disp = card("Display");
         disp.addView(toggle("Shrink screen", "Two equal black bars hide the broken area",
@@ -118,6 +134,10 @@ public class MainActivity extends Activity {
         statusButton.setVisibility(on ? View.GONE : View.VISIBLE);
         blockedNum.setText(String.valueOf(prefs.getLong(Prefs.BLOCKED, 0)));
         passedNum.setText(String.valueOf(prefs.getLong(Prefs.PASSED, 0)));
+        int n = Zones.load(prefs).size();
+        zonesText.setText(n == 0
+                ? "Draw extra areas where every touch is blocked."
+                : n + (n == 1 ? " zone" : " zones") + " — every touch inside is blocked.");
     }
 
     // --- Sections --------------------------------------------------------
