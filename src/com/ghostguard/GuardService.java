@@ -4,6 +4,10 @@ import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.content.ComponentName;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
+import android.hardware.display.DisplayManager;
+import android.view.Display;
+import android.view.Surface;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Path;
@@ -96,6 +100,58 @@ public class GuardService extends AccessibilityService
     public void onInterrupt() {}
 
     @Override
+    public void onConfigurationChanged(Configuration c) {
+        super.onConfigurationChanged(c);
+        // Rotation : les zones restent collées au téléphone physique.
+        if (prefs != null) applyPrefs();
+    }
+
+    // --- Repère « naturel » (portrait) -----------------------------------
+    // Les zones sont définies sur le téléphone tenu droit ; en paysage on les fait tourner.
+
+    private int rotation() {
+        return getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY).getRotation();
+    }
+
+    /** Largeur et hauteur du téléphone tenu en portrait. */
+    private int[] naturalSize() {
+        Rect b = wm.getMaximumWindowMetrics().getBounds();
+        int r = rotation();
+        return r == Surface.ROTATION_90 || r == Surface.ROTATION_270
+                ? new int[]{b.height(), b.width()} : new int[]{b.width(), b.height()};
+    }
+
+    /** Point portrait -> point affiché. */
+    private float[] toDisplay(float x, float y) {
+        int[] n = naturalSize();
+        switch (rotation()) {
+            case Surface.ROTATION_90: return new float[]{y, n[0] - x};
+            case Surface.ROTATION_180: return new float[]{n[0] - x, n[1] - y};
+            case Surface.ROTATION_270: return new float[]{n[1] - y, x};
+            default: return new float[]{x, y};
+        }
+    }
+
+    /** Point affiché -> point portrait. */
+    private float[] toNatural(float x, float y) {
+        int[] n = naturalSize();
+        switch (rotation()) {
+            case Surface.ROTATION_90: return new float[]{n[0] - y, x};
+            case Surface.ROTATION_180: return new float[]{n[0] - x, n[1] - y};
+            case Surface.ROTATION_270: return new float[]{y, n[1] - x};
+            default: return new float[]{x, y};
+        }
+    }
+
+    /** Rectangle portrait (px) -> rectangle affiché {x, y, w, h}. */
+    private int[] displayRect(RectF nat) {
+        float[] a = toDisplay(nat.left, nat.top), b = toDisplay(nat.right, nat.bottom);
+        int l = Math.round(Math.min(a[0], b[0])), t = Math.round(Math.min(a[1], b[1]));
+        int r = Math.round(Math.max(a[0], b[0])), bt = Math.round(Math.max(a[1], b[1]));
+        return new int[]{l, t, Math.max(1, r - l), Math.max(1, bt - t)};
+    }
+
+    @Override
     public void onDestroy() {
         if (prefs != null) prefs.unregisterOnSharedPreferenceChangeListener(this);
         removeShields();
@@ -118,18 +174,22 @@ public class GuardService extends AccessibilityService
 
         boolean full = prefs.getBoolean(Prefs.FULL, false);
         Shield shield = new Shield();
-        addPane(shield, 0, 0, WindowManager.LayoutParams.MATCH_PARENT,
-                full ? WindowManager.LayoutParams.MATCH_PARENT : zonePx());
+        int[] n = naturalSize();
+        if (full) {
+            addPane(shield, 0, 0, WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT);
+        } else {
+            int[] d = displayRect(new RectF(0, 0, n[0], zonePx()));
+            addPane(shield, d[0], d[1], d[2], d[3]);
+        }
         // Être prévenu (sans coordonnées) de chaque appui hors de la zone du haut.
         WindowManager.LayoutParams slp = (WindowManager.LayoutParams) shield.getLayoutParams();
         slp.flags |= WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
         wm.updateViewLayout(shield, slp);
 
-        Rect screen = wm.getMaximumWindowMetrics().getBounds();
         for (RectF z : Zones.load(prefs)) {
-            int l = Math.round(z.left * screen.width()), t = Math.round(z.top * screen.height());
-            int r = Math.round(z.right * screen.width()), b = Math.round(z.bottom * screen.height());
-            addPane(new Blocker(), l, t, Math.max(1, r - l), Math.max(1, b - t));
+            int[] d = displayRect(new RectF(z.left * n[0], z.top * n[1], z.right * n[0], z.bottom * n[1]));
+            addPane(new Blocker(), d[0], d[1], d[2], d[3]);
         }
     }
 
@@ -195,8 +255,9 @@ public class GuardService extends AccessibilityService
 
     private void reportBlocked(Pane p, float rawX, float rawY) {
         pendingBlocked++;
-        Rect screen = wm.getMaximumWindowMetrics().getBounds();
-        pendingHeat.add(new float[]{rawX / screen.width(), rawY / screen.height()});
+        int[] n = naturalSize();
+        float[] p0 = toNatural(rawX, rawY);
+        pendingHeat.add(new float[]{p0[0] / n[0], p0[1] / n[1]});
         pendingApps.add(currentPkg);
         p.flash();
         scheduleFlush();
@@ -357,7 +418,7 @@ public class GuardService extends AccessibilityService
                     trackedId = e.getPointerId(0);
                     downTime = e.getEventTime();
                     float x = e.getRawX(), y = e.getRawY();
-                    startInTop = y < zone;
+                    startInTop = toNatural(x, y)[1] < zone;
                     suspect = noteDownAndCheckBurst(now, startInTop);
                     if (startInTop) {
                         // Juste après un vrai appui ailleurs : c'est la cascade.
@@ -372,7 +433,8 @@ public class GuardService extends AccessibilityService
                     // Un 2e doigt qui apparaît dans la zone du haut : presque sûrement un fantôme.
                     int i = e.getActionIndex();
                     float y = e.getY(i) + (e.getRawY() - e.getY());
-                    if (y < zone) noteDownAndCheckBurst(now, true);
+                    float x = e.getX(i) + (e.getRawX() - e.getX());
+                    if (toNatural(x, y)[1] < zone) noteDownAndCheckBurst(now, true);
                     return true;
                 }
                 case MotionEvent.ACTION_MOVE: {
